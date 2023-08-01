@@ -1,0 +1,56 @@
+[push]
+    default = simple
+[user]
+    name = <Name>
+[user]
+    email = <Email>
+[core]
+    autocrlf = true
+    longpaths = true
+    editor = "C:/tools/FarRun/farrun -e1:1"
+    safecrlf = warn
+[push]
+    default = simple
+    followTags = true
+[status]
+    submoduleSummary = true
+[diff]
+    submodule = log
+    tool = meld
+[fetch]
+    recurseSubmodules = on-demand
+[branch]
+    autosetuprebase = always
+[filter "lfs"]
+    clean = git-lfs clean -- %f
+    smudge = git-lfs smudge -- %f
+    required = true
+    process = git-lfs filter-process
+[alias]
+    a = add
+    d = diff
+    pu = push
+    co = checkout
+    ci = commit
+    st = status
+    br = branch
+    res = reset
+    reb = rebase
+    ls = log --stat
+    type = 'cat-file
+    dump = 'cat-file
+    unadd = reset HEAD
+    lg1 = log --graph --abbrev-commit --decorate --format=format:'%C(bold blue)%h%C(reset) - %C(bold green)(%ar)%C(reset) %C(white)%s%C(reset) %C(dim white)- %an%C(reset)%C(bold yellow)%d%C(reset)' --all
+    lg2 = log --graph --abbrev-commit --decorate --format=format:'%C(bold blue)%h%C(reset) - %C(bold cyan)%aD%C(reset) %C(bold green)(%ar)%C(reset)%C(bold yellow)%d%C(reset)%n''          %C(white)%s%C(reset) %C(dim white)- %an%C(reset)' --all
+    lg = !"git lg1"
+    cmp = diff --name-status 
+    ignore = update-index --assume-unchanged
+    unignore = update-index --no-assume-unchanged
+    update-from = "!f() { git fetch $1 --prune; git merge --ff-only $1/$2 || git rebase --preserve-merges $1/$2; }; f"
+    upd = "!f() { git fetch origin --prune; git merge --ff-only origin/$1 || git rebase --preserve-merges origin/$1; }; f"
+    fe = fetch origin --prune
+[i18n]
+    commitencoding = cp1251
+    logoutputencoding = cp866
+[credential]
+    helper = manager-core
