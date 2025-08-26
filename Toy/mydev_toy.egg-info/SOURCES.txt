@@ -1,0 +1,7 @@
+pyproject.toml
+mydev/python/test_mydev.py
+mydev_toy.egg-info/PKG-INFO
+mydev_toy.egg-info/SOURCES.txt
+mydev_toy.egg-info/dependency_links.txt
+mydev_toy.egg-info/requires.txt
+mydev_toy.egg-info/top_level.txt

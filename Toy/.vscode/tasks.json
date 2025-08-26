@@ -1,0 +1,50 @@
+{
+    // Задачи сборки через CMakePresets
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "CMake: Configure (py-debug)",
+            "type": "shell",
+            "command": "cmake --preset py-debug",
+            "options": {
+                "cwd": "${workspaceFolder}/mydev"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Build (py-debug)",
+            "type": "shell",
+            "command": "cmake --build --preset py-debug -j",
+            "options": {
+                "cwd": "${workspaceFolder}/mydev"
+            },
+            "problemMatcher": ["$gcc"],
+            "dependsOn": [
+                "CMake: Configure (py-debug)"
+            ]
+        },
+        {
+            "label": "CMake: Configure (linux-debug)",
+            "type": "shell",
+            "command": "cmake --preset linux-debug",
+            "options": {
+                "cwd": "${workspaceFolder}/mydev"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Build (linux-debug)",
+            "type": "shell",
+            "command": "cmake --build --preset linux-debug -j",
+            "options": {
+                "cwd": "${workspaceFolder}/mydev"
+            },
+            "problemMatcher": ["$gcc"],
+            "dependsOn": [
+                "CMake: Configure (linux-debug)"
+            ]
+        }
+    ]
+}
+
+

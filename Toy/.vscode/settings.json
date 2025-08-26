@@ -1,0 +1,10 @@
+{
+    "python.defaultInterpreterPath": "/home/kilka/Projects/ML/TT-NN/Toy/.venv/bin/python",
+    "cmake.useCMakePresets": "always",
+    "cmake.buildDirectory": "${workspaceFolder}/build-py/py-debug",
+    "cmake.configureOnOpen": false
+}
+
+{
+    "cmake.sourceDirectory": "/home/kilka/Projects/ML/TT-NN/Toy/mydev"
+}

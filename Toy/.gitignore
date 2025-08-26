@@ -1,0 +1,5 @@
+build*/
+vcpkg/
+.venv/
+.cache/
+__pycache__/
