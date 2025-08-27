@@ -1,0 +1,15 @@
+**/.git
+**/.gitignore
+**/.venv
+**/__pycache__
+**/.mypy_cache
+**/.pytest_cache
+**/.idea
+**/.vscode
+**/build
+**/build-* 
+**/*.egg-info
+**/.DS_Store
+**/*.ipynb_checkpoints
+
+
