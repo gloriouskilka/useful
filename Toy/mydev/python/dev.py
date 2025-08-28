@@ -15,7 +15,7 @@ x = torch.ones((2, 2), device=device)
 y = torch.zeros((2, 2), device=device)
 z = torch.add(x, x)
 m = torch.mul(z, z)  # (2+2)^2 = 16 для каждого элемента
-r = torch.relu(z.add(torch.tensor(-1.0, device=device)))
+r = torch.add(z,  -1.0).relu()
 
 print('ops:', {
     'x': str(x.device),
