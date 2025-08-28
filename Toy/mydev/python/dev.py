@@ -8,9 +8,19 @@ except ImportError:
 
 device = load_and_pick_device()
 
-# Фокус: использование реализации
-x = torch.empty((2, 2), device=device)
-x.fill_(1.0)
-y = torch.add(x, x, alpha=1.0)
+# Демонстрация доступных операций
+print('device:', device)
 
-print('ready:', {'device': device, 'x': str(x.device), 'y': str(y.device), 'shape': tuple(y.shape)})
+x = torch.ones((2, 2), device=device)
+y = torch.zeros((2, 2), device=device)
+z = torch.add(x, x)
+m = torch.mul(z, z)  # (2+2)^2 = 16 для каждого элемента
+r = torch.relu(z.add(torch.tensor(-1.0, device=device)))
+
+print('ops:', {
+    'x': str(x.device),
+    'y': str(y.device),
+    'z': tuple(z.shape),
+    'm[0,0]': float(m.to('cpu')[0,0]),
+    'r_min': float(r.to('cpu').min()),
+})

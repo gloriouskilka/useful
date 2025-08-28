@@ -11,6 +11,7 @@
 #include <c10/core/ScalarType.h>
 #include <c10/core/TensorImpl.h>
 #include <torch/library.h>
+#include <algorithm>
 
 namespace {
 
@@ -196,23 +197,174 @@ static at::Tensor mydev_add(const at::Tensor& a, const at::Tensor& b, const at::
     return out;
 }
 
-// === 5c) Реализация aten::_copy_from под PrivateUse1 (поддерживаем копирование -> CPU) ===
+// === 5c) Реализация aten::_copy_from под PrivateUse1 (поддерживаем CPU<->mydev и mydev<->mydev) ===
 static at::Tensor mydev__copy_from(const at::Tensor& self, const at::Tensor& dst, bool non_blocking) {
-    TORCH_CHECK(self.device().type() == c10::DeviceType::PrivateUse1,
-                "mydev__copy_from: source tensor не на устройстве mydev");
     (void)non_blocking;
 
-    if (dst.device().type() == c10::DeviceType::CPU) {
-        TORCH_CHECK(self.scalar_type() == dst.scalar_type(), "dtype mismatch in _copy_from");
-        TORCH_CHECK(self.sizes() == dst.sizes(), "size mismatch in _copy_from");
-        TORCH_CHECK(self.is_contiguous() && dst.is_contiguous(), "_copy_from: поддерживается только contiguous");
+    TORCH_CHECK(self.scalar_type() == dst.scalar_type(), "dtype mismatch in _copy_from");
+    TORCH_CHECK(self.sizes() == dst.sizes(), "size mismatch in _copy_from");
+    TORCH_CHECK(self.is_contiguous() && dst.is_contiguous(), "_copy_from: поддерживается только contiguous");
 
-        size_t nbytes = static_cast<size_t>(self.numel()) * at::elementSize(self.scalar_type());
-        std::memcpy(dst.data_ptr(), self.data_ptr(), nbytes);
-        return dst;
+    const auto src_dev = self.device().type();
+    const auto dst_dev = dst.device().type();
+
+    // Поддерживаем направления: mydev->CPU, CPU->mydev, mydev->mydev
+    bool src_supported = (src_dev == c10::DeviceType::PrivateUse1) || (src_dev == c10::DeviceType::CPU);
+    bool dst_supported = (dst_dev == c10::DeviceType::PrivateUse1) || (dst_dev == c10::DeviceType::CPU);
+    TORCH_CHECK(src_supported && dst_supported, "mydev__copy_from: поддерживаются только CPU и mydev");
+
+    size_t nbytes = static_cast<size_t>(self.numel()) * at::elementSize(self.scalar_type());
+    std::memcpy(dst.data_ptr(), self.data_ptr(), nbytes);
+    return dst;
+}
+
+// === 5d) Реализация aten::mul.Tensor под PrivateUse1 ===
+static at::Tensor mydev_mul(const at::Tensor& a, const at::Tensor& b) {
+    TORCH_CHECK(a.device().type() == c10::DeviceType::PrivateUse1,
+                "mydev_mul: tensor 'a' не на устройстве mydev");
+    TORCH_CHECK(b.device().type() == c10::DeviceType::PrivateUse1,
+                "mydev_mul: tensor 'b' не на устройстве mydev");
+    TORCH_CHECK(a.scalar_type() == c10::ScalarType::Float,
+                "mydev_mul: поддерживается только float32");
+    TORCH_CHECK(b.scalar_type() == a.scalar_type(),
+                "mydev_mul: dtype должен совпадать");
+    TORCH_CHECK(a.sizes() == b.sizes(),
+                "mydev_mul: требуем одинаковые размеры без broadcasting");
+
+    at::Tensor out = mydev_empty_impl(a.sizes(), a.scalar_type(), c10::nullopt);
+
+    auto* ap = reinterpret_cast<float*>(a.data_ptr());
+    auto* bp = reinterpret_cast<float*>(b.data_ptr());
+    auto* op = reinterpret_cast<float*>(out.data_ptr());
+
+    size_t n = a.numel();
+    for (size_t i = 0; i < n; ++i) {
+        op[i] = ap[i] * bp[i];
     }
+    return out;
+}
 
-    TORCH_CHECK(false, "mydev__copy_from: поддерживается только копирование в CPU");
+// === 5e) Реализация aten::relu и aten::relu_ под PrivateUse1 ===
+static at::Tensor mydev_relu(const at::Tensor& self) {
+    TORCH_CHECK(self.device().type() == c10::DeviceType::PrivateUse1,
+                "mydev_relu: tensor не на устройстве mydev");
+    TORCH_CHECK(self.scalar_type() == c10::ScalarType::Float,
+                "mydev_relu: поддерживается только float32");
+
+    at::Tensor out = mydev_empty_impl(self.sizes(), self.scalar_type(), c10::nullopt);
+    auto* sp = reinterpret_cast<float*>(self.data_ptr());
+    auto* op = reinterpret_cast<float*>(out.data_ptr());
+    size_t n = self.numel();
+    for (size_t i = 0; i < n; ++i) {
+        float v = sp[i];
+        op[i] = v > 0.0f ? v : 0.0f;
+    }
+    return out;
+}
+
+static at::Tensor& mydev_relu_(at::Tensor& self) {
+    TORCH_CHECK(self.device().type() == c10::DeviceType::PrivateUse1,
+                "mydev_relu_: tensor не на устройстве mydev");
+    TORCH_CHECK(self.scalar_type() == c10::ScalarType::Float,
+                "mydev_relu_: поддерживается только float32");
+
+    auto* sp = reinterpret_cast<float*>(self.data_ptr());
+    size_t n = self.numel();
+    for (size_t i = 0; i < n; ++i) {
+        if (sp[i] < 0.0f) sp[i] = 0.0f;
+    }
+    return self;
+}
+
+// === 5f) Реализация aten::zeros.memory_format и aten::ones.memory_format под PrivateUse1 ===
+static at::Tensor mydev_zeros(
+    c10::IntArrayRef size,
+    c10::optional<c10::ScalarType> dtype_opt,
+    c10::optional<c10::Layout> layout_opt,
+    c10::optional<c10::Device> device_opt,
+    c10::optional<bool> pin_memory_opt
+) {
+    TORCH_CHECK(!layout_opt.has_value() || layout_opt.value() == c10::Layout::Strided,
+                "mydev: поддерживается только Layout::Strided");
+    c10::ScalarType dtype = dtype_opt.value_or(c10::ScalarType::Float);
+    (void)device_opt; (void)pin_memory_opt;
+    at::Tensor t = mydev_empty_impl(size, dtype, c10::nullopt);
+    if (dtype == c10::ScalarType::Float) {
+        auto* p = reinterpret_cast<float*>(t.data_ptr());
+        size_t n = t.numel();
+        for (size_t i = 0; i < n; ++i) p[i] = 0.0f;
+        return t;
+    }
+    TORCH_CHECK(false, "mydev_zeros: поддерживается только float32");
+}
+
+static at::Tensor mydev_ones(
+    c10::IntArrayRef size,
+    c10::optional<c10::ScalarType> dtype_opt,
+    c10::optional<c10::Layout> layout_opt,
+    c10::optional<c10::Device> device_opt,
+    c10::optional<bool> pin_memory_opt
+) {
+    TORCH_CHECK(!layout_opt.has_value() || layout_opt.value() == c10::Layout::Strided,
+                "mydev: поддерживается только Layout::Strided");
+    c10::ScalarType dtype = dtype_opt.value_or(c10::ScalarType::Float);
+    (void)device_opt; (void)pin_memory_opt;
+    at::Tensor t = mydev_empty_impl(size, dtype, c10::nullopt);
+    if (dtype == c10::ScalarType::Float) {
+        auto* p = reinterpret_cast<float*>(t.data_ptr());
+        size_t n = t.numel();
+        for (size_t i = 0; i < n; ++i) p[i] = 1.0f;
+        return t;
+    }
+    TORCH_CHECK(false, "mydev_ones: поддерживается только float32");
+}
+
+// === 5g) Реализация aten::copy_ под PrivateUse1 (назначение self на mydev) ===
+static at::Tensor& mydev_copy_(at::Tensor& self, const at::Tensor& src, bool non_blocking) {
+    (void)non_blocking;
+    TORCH_CHECK(self.scalar_type() == src.scalar_type(), "dtype mismatch in copy_");
+    TORCH_CHECK(self.sizes() == src.sizes(), "size mismatch in copy_");
+    TORCH_CHECK(self.is_contiguous() && src.is_contiguous(), "copy_: поддерживается только contiguous");
+
+    const auto dst_dev = self.device().type();
+    const auto src_dev = src.device().type();
+    TORCH_CHECK(
+        (dst_dev == c10::DeviceType::PrivateUse1 || dst_dev == c10::DeviceType::CPU) &&
+        (src_dev == c10::DeviceType::PrivateUse1 || src_dev == c10::DeviceType::CPU),
+        "mydev_copy_: поддерживаются только CPU<->mydev"
+    );
+
+    size_t nbytes = static_cast<size_t>(self.numel()) * at::elementSize(self.scalar_type());
+    std::memcpy(self.data_ptr(), src.data_ptr(), nbytes);
+    return self;
+}
+
+// === 5h) Реализация aten::empty_like под PrivateUse1 ===
+static at::Tensor mydev_empty_like(
+    const at::Tensor& self,
+    c10::optional<c10::ScalarType> dtype_opt,
+    c10::optional<c10::Layout> layout_opt,
+    c10::optional<c10::Device> device_opt,
+    c10::optional<bool> pin_memory_opt,
+    c10::optional<c10::MemoryFormat> memory_format_opt
+) {
+    TORCH_CHECK(!layout_opt.has_value() || layout_opt.value() == c10::Layout::Strided,
+                "mydev: поддерживается только Layout::Strided");
+    c10::ScalarType dtype = dtype_opt.value_or(self.scalar_type());
+    (void)device_opt; (void)pin_memory_opt;
+    return mydev_empty_impl(self.sizes(), dtype, memory_format_opt);
+}
+
+// === 5i) Реализация aten::_copy_from_and_resize под PrivateUse1 ===
+// Создаёт новый тензор на mydev, размером как src, и копирует данные
+static at::Tensor mydev__copy_from_and_resize(const at::Tensor& src, const at::Tensor& dst_like) {
+    (void)dst_like; // используем семантику: возвращаем новый тензор-результат на mydev
+    TORCH_CHECK(src.scalar_type() == c10::ScalarType::Float, "mydev__copy_from_and_resize: поддерживается только float32");
+
+    at::Tensor out = mydev_empty_impl(src.sizes(), src.scalar_type(), c10::nullopt);
+    size_t nbytes = static_cast<size_t>(src.numel()) * at::elementSize(src.scalar_type());
+    std::memcpy(out.data_ptr(), src.data_ptr(), nbytes);
+    return out;
 }
 
 // === 6) Реализация aten::fill_.Scalar под PrivateUse1 ===
@@ -235,9 +387,17 @@ static at::Tensor& mydev_fill_scalar_(at::Tensor& self, const at::Scalar& value)
 TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
     m.impl("empty.memory_format", TORCH_FN(mydev_empty));
     m.impl("empty_strided", TORCH_FN(mydev_empty_strided));
+    m.impl("empty_like", TORCH_FN(mydev_empty_like));
     m.impl("add.Tensor", TORCH_FN(mydev_add));
     m.impl("fill_.Scalar", TORCH_FN(mydev_fill_scalar_));
     m.impl("_copy_from", TORCH_FN(mydev__copy_from));
+    m.impl("_copy_from_and_resize", TORCH_FN(mydev__copy_from_and_resize));
+    m.impl("mul.Tensor", TORCH_FN(mydev_mul));
+    m.impl("relu", TORCH_FN(mydev_relu));
+    m.impl("relu_", TORCH_FN(mydev_relu_));
+    m.impl("zeros", TORCH_FN(mydev_zeros));
+    m.impl("ones", TORCH_FN(mydev_ones));
+    m.impl("copy_", TORCH_FN(mydev_copy_));
 }
 
 // Общий boxed-fallback на CPU для непрореализованных операторов
