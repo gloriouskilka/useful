@@ -138,6 +138,8 @@ FROM ci-build AS ci-test
 
 ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
 ARG TT_METAL_SRC=tt-metal
+ARG INSTALL_DEV_REQS=0
+ENV INSTALL_DEV_REQS=${INSTALL_DEV_REQS}
 
 RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/ \
     && mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/ \
@@ -148,8 +150,8 @@ COPY ${TT_METAL_SRC}/tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_IN
 COPY ${TT_METAL_SRC}/tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt
 
 RUN python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu \
-    && python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt \
-    && python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt \
+    && if [ "$INSTALL_DEV_REQS" = "1" ]; then python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt; fi \
+    && if [ "$INSTALL_DEV_REQS" = "1" ]; then python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt; fi \
     && chmod -R 777 $VIRTUAL_ENV
 
 #################################################################
