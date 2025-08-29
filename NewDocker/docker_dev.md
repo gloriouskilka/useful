@@ -17,7 +17,7 @@ bash ./docker_dev.sh --post-create
 Можно совместить:
 
 ```bash
-bash ./docker_dev.sh --recreate --post-create
+bash ./do
 ```
 
 #### Полные dev-зависимости (медленно; может падать на fiftyone-db)
@@ -31,6 +31,16 @@ bash ./docker_dev.sh --post-create --full-dev
 ```bash
 docker exec -it ttnn-dev bash
 ```
+
+#### Ручной запуск сборки тулчейна из workspace
+
+Скрипт сборки находится в `scripts/build_toolchain.sh` и не вшивается в образ. Запустите его внутри контейнера из корня workspace:
+
+```bash
+docker exec -it ttnn-dev bash -lc 'NO_AVX_FLAGS="-mno-avx -mno-avx2 -mno-sse4.2 -mno-sse4.1" bash ./scripts/build_toolchain.sh'
+```
+
+Можно кастомизировать версии (переменные среды): `BOOST_VERSION`, `PYBIND11_VERSION`, `RANGE_V3_VERSION`, `TAKSFLOW_VERSION`, `XTENSOR_XTL_VERSION`, `DOXYGEN_VERSION`.
 
 #### Остановка и удаление контейнера
 
