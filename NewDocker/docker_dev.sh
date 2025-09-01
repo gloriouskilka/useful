@@ -45,10 +45,12 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 # Сборка образа
+PLATFORM="linux/amd64"
 BUILD_ARGS=(
   -f "${PROJECT_ROOT}/Dockerfile"
   -t "${IMAGE_NAME}"
   --pull
+  --platform "${PLATFORM}"
 )
 ${RECREATE} && BUILD_ARGS+=(--no-cache)
 
@@ -66,6 +68,7 @@ docker build "${BUILD_ARGS[@]}" "${PROJECT_ROOT}"
 
 # Подготовка опций запуска (монтирование устройств, если есть)
 RUN_OPTS=(
+  --platform "${PLATFORM}"
   --name "${CONTAINER_NAME}"
   --restart unless-stopped
   -v "${PROJECT_ROOT}:${WORKSPACE_IN_CONTAINER}"
