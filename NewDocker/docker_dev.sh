@@ -11,20 +11,16 @@ PROJECT_ROOT="${SCRIPT_DIR}"
 WORKSPACE_IN_CONTAINER="/workspace"
 
 RECREATE=false
-RUN_POSTCREATE=false
-FULL_DEV_REQS=0
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [--recreate] [--post-create] [--full-dev] [--help]
+Usage: $(basename "$0") [--recreate] [--help]
 
   --recreate     Пересобрать образ без кэша и пересоздать контейнер
-  --post-create  После запуска контейнера выполнить postCreate.sh внутри
-  --full-dev     Установить полные dev-зависимости (медленно, может падать)
   --help         Показать справку
 
 Пример:
-  $0 --recreate --post-create
+  $0 --recreate
 EOF
 }
 
@@ -32,10 +28,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --recreate)
       RECREATE=true; shift;;
-    --post-create)
-      RUN_POSTCREATE=true; shift;;
-    --full-dev)
-      FULL_DEV_REQS=1; shift;;
+    
     --help|-h)
       usage; exit 0;;
     *)
@@ -58,6 +51,10 @@ BUILD_ARGS=(
   --pull
 )
 ${RECREATE} && BUILD_ARGS+=(--no-cache)
+
+# Фиксированный путь к tt-metal внутри workspace
+echo "[docker_dev] Использую TT_METAL_SRC=pytorch2.0_ttnn/torch_ttnn/cpp_extension/third-party/tt-metal"
+BUILD_ARGS+=(--build-arg TT_METAL_SRC=pytorch2.0_ttnn/torch_ttnn/cpp_extension/third-party/tt-metal)
 
 if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
   echo "[docker_dev] Найден существующий контейнер ${CONTAINER_NAME}"
@@ -97,10 +94,7 @@ fi
 
 echo "[docker_dev] Контейнер готов: ${CONTAINER_NAME} (image: ${IMAGE_NAME})"
 
-if ${RUN_POSTCREATE}; then
-  echo "[docker_dev] Выполняю postCreate.sh внутри контейнера"
-  docker exec "${CONTAINER_NAME}" bash -lc "FULL_DEV_REQS=${FULL_DEV_REQS} bash ./postCreate.sh"
-fi
+:
 
 cat <<EOM
 

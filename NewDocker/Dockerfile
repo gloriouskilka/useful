@@ -23,7 +23,7 @@ COPY ${TT_METAL_SRC}/install_dependencies.sh /opt/tt_metal_infra/scripts/docker/
 # Разместим sfpi-version там, где первым делом ищет скрипт: $(dirname $0)/tt_metal/sfpi-version.sh
 RUN mkdir -p /opt/tt_metal_infra/scripts/docker/tt_metal
 COPY ${TT_METAL_SRC}/tt_metal/sfpi-version.sh /opt/tt_metal_infra/scripts/docker/tt_metal/sfpi-version.sh
-RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docker --mode runtime
+RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docker --mode build
 
 #################################################################
 # ci-build: добавляем тулчейн и сторонние либы, как в tt-metal
@@ -57,10 +57,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Виртуальное окружение, как в tt-metal
 ENV PYTHON_ENV_DIR=/opt/venv
+RUN apt-get update && apt-get install -y --no-install-recommends python3-venv \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 RUN python3 -m venv $PYTHON_ENV_DIR
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
 ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
+RUN echo "source /opt/venv/bin/activate" >> /root/.bashrc
+
+# Dev convenience: TT_METAL_HOME points to submodule path under workspace
+ENV TT_METAL_HOME=/workspace/pytorch2.0_ttnn/torch_ttnn/cpp_extension/third-party/tt-metal
+RUN printf 'export TT_METAL_HOME=/workspace/pytorch2.0_ttnn/torch_ttnn/cpp_extension/third-party/tt-metal\n' > /etc/profile.d/tt_env.sh \
+    && chmod +x /etc/profile.d/tt_env.sh \
+    && echo 'export TT_METAL_HOME=/workspace/pytorch2.0_ttnn/torch_ttnn/cpp_extension/third-party/tt-metal' >> /root/.bashrc
 
 # numpy требуется для сборки tt-train
 RUN python3 -m pip install --no-cache-dir --upgrade pip \
@@ -78,7 +87,7 @@ ARG TARGETARCH
 ENV TARGETARCH=${TARGETARCH}
 
 ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
-ARG TT_METAL_SRC=tt-metal
+ARG TT_METAL_SRC
 ARG INSTALL_DEV_REQS=0
 ENV INSTALL_DEV_REQS=${INSTALL_DEV_REQS}
 
@@ -114,7 +123,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# IWYU теперь ставится внутри build_toolchain.sh
+# IWYU ставится внутри scripts/build_toolchain.sh (по необходимости)
 
 # Если не 24.04 — пересобрать gdb 14.2 (как в оригинале)
 RUN [ "$UBUNTU_VERSION" != "24.04" ] && apt-get remove -y gdb || true

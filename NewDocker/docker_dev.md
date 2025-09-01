@@ -8,22 +8,12 @@
 bash ./docker_dev.sh --recreate
 ```
 
-#### Выполнить пост-настройку (сборка tt-metal, установка pytorch2.0_ttnn)
+#### Пост-настройка
+
+Вся последовательность (зависимости tt-metal → сборка PyTorch → сборка tt-metal) выполняется единым скриптом `scripts/build_toolchain.sh`.
 
 ```bash
-bash ./docker_dev.sh --post-create
-```
-
-Можно совместить:
-
-```bash
-bash ./do
-```
-
-#### Полные dev-зависимости (медленно; может падать на fiftyone-db)
-
-```bash
-bash ./docker_dev.sh --post-create --full-dev
+docker exec -it ttnn-dev bash -lc 'NO_AVX_FLAGS="-mno-avx -mno-avx2 -mno-sse4.2 -mno-sse4.1" bash ./scripts/build_toolchain.sh'
 ```
 
 #### Подключение в контейнер
@@ -41,6 +31,43 @@ docker exec -it ttnn-dev bash -lc 'NO_AVX_FLAGS="-mno-avx -mno-avx2 -mno-sse4.2 
 ```
 
 Можно кастомизировать версии (переменные среды): `BOOST_VERSION`, `PYBIND11_VERSION`, `RANGE_V3_VERSION`, `TAKSFLOW_VERSION`, `XTENSOR_XTL_VERSION`, `DOXYGEN_VERSION`.
+ 
+### Проверка исходников и фиксация версий (до сборки)
+
+В контейнере, внутри `/workspace`, убедитесь, что каталоги и версии исходников соответствуют ожидаемым.
+
+1) PyTorch (ожидаемая версия: v2.2.1)
+
+```bash
+cd /workspace
+test -d pytorch || git clone https://github.com/pytorch/pytorch.git pytorch
+cd pytorch
+git remote set-url origin https://github.com/pytorch/pytorch.git
+git fetch --tags --force --prune
+git checkout tags/v2.2.1
+git submodule sync --recursive
+git submodule update --init --recursive
+```
+
+2) pytorch2.0_ttnn (проверено на v0.60.1)
+
+```bash
+cd /workspace
+test -d pytorch2.0_ttnn || git clone https://github.com/tenstorrent/pytorch2.0_ttnn.git pytorch2.0_ttnn
+cd pytorch2.0_ttnn
+git remote set-url origin https://github.com/tenstorrent/pytorch2.0_ttnn.git
+git fetch --tags --force --prune
+git checkout tags/v0.60.1
+git submodule sync --recursive
+git submodule update --init --recursive
+```
+
+После этого запускайте:
+
+```bash
+docker exec -it ttnn-dev bash -lc 'source /etc/profile.d/tt_env.sh && ./scripts/build_toolchain.sh --rebuild'
+docker exec -it ttnn-dev bash -lc 'source /etc/profile.d/tt_env.sh && ./scripts/build_ttnn_cpp_extension.sh --rebuild'
+```
 
 #### Остановка и удаление контейнера
 
@@ -64,15 +91,11 @@ docker run -d --name ttnn-dev \
   ttnn-dev sleep infinity
 ```
 
-После запуска можно выполнить пост-настройку внутри контейнера:
-
-```bash
-docker exec ttnn-dev bash -lc 'bash ./postCreate.sh'
-```
+Пост-настройка запускается вручную через `scripts/build_toolchain.sh` (см. выше).
 
 ### Примечания
 
 - Скрипт автоматически примонтирует `/dev/hugepages-1G` и устройство `/dev/tenstorrent`, если они доступны на хосте.
-- `--full-dev` пробрасывает `FULL_DEV_REQS=1` в `postCreate.sh` и устанавливает тяжёлые dev-зависимости tt-metal.
+- `--full-dev` пробрасывает `FULL_DEV_REQS=1` во встроенную пост-настройку и устанавливает тяжёлые dev-зависимости tt-metal.
 
 
