@@ -45,7 +45,9 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 # Сборка образа
-PLATFORM="linux/amd64"
+# Платформа образа: по умолчанию linux/arm64 (нативно для Mac M1)
+# Можно переопределить через переменную окружения DOCKER_PLATFORM (например, linux/amd64)
+PLATFORM="${DOCKER_PLATFORM:-linux/arm64}"
 BUILD_ARGS=(
   -f "${PROJECT_ROOT}/Dockerfile"
   -t "${IMAGE_NAME}"

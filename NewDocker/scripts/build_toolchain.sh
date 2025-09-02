@@ -79,15 +79,24 @@ ensure_clang_aliases() {
 install_ccache() {
   if command -v ccache >/dev/null 2>&1; then
     echo "[build] ccache already present: $(ccache --version | head -n1)"; return 0; fi
-  local arch
-  arch="$(uname -m)"
-  local tar_arch
-  if [[ "$arch" == "aarch64" || "$arch" == "arm64" ]]; then tar_arch=aarch64; else tar_arch=x86_64; fi
-  echo "[build] Installing ccache for ${tar_arch}"
-  mkdir -p /usr/local/bin
-  wget -O /tmp/ccache.tar.xz "https://github.com/ccache/ccache/releases/download/v4.10.2/ccache-4.10.2-linux-${tar_arch}.tar.xz"
-  tar -xf /tmp/ccache.tar.xz -C /usr/local/bin --strip-components=1
-  rm -f /tmp/ccache.tar.xz
+  echo "[build] Installing ccache via apt"
+  # Previous GitHub binary download logic (kept for reference):
+  # local arch
+  # arch="$(uname -m)"
+  # local tar_arch
+  # if [[ "$arch" == "aarch64" || "$arch" == "arm64" ]]; then tar_arch=aarch64; else tar_arch=x86_64; fi
+  # echo "[build] Installing ccache for ${tar_arch}"
+  # mkdir -p /usr/local/bin
+  # wget -O /tmp/ccache.tar.xz "https://github.com/ccache/ccache/releases/download/v4.10.2/ccache-4.10.2-linux-${tar_arch}.tar.xz"
+  # tar -xf /tmp/ccache.tar.xz -C /usr/local/bin --strip-components=1
+  # rm -f /tmp/ccache.tar.xz
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update -y || true
+    apt-get install -y --no-install-recommends ccache
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+  else
+    echo "[build][WARN] apt-get not available; please install ccache manually"
+  fi
 }
 
 build_boost() {
