@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Global flags: image is no-AVX by default; allow override
-: "${NO_AVX_FLAGS:=-mno-avx -mno-avx2 -mno-sse4.2 -mno-sse4.1}"
-export CFLAGS="${NO_AVX_FLAGS}"
-export CXXFLAGS="${NO_AVX_FLAGS}"
+# Global flags: image is no-AVX by default on x86_64; allow override
+host_arch_init="$(uname -m || echo unknown)"
+if [[ "${host_arch_init}" == "x86_64" || "${host_arch_init}" == "amd64" ]]; then
+  : "${NO_AVX_FLAGS:=-mno-avx -mno-avx2 -mno-sse4.2 -mno-sse4.1}"
+  export CFLAGS="${NO_AVX_FLAGS}"
+  export CXXFLAGS="${NO_AVX_FLAGS}"
+else
+  : "${NO_AVX_FLAGS:=}"
+  export CFLAGS="-Wno-error=unused-command-line-argument -Wno-unused-command-line-argument"
+  export CXXFLAGS="-Wno-error=unused-command-line-argument -Wno-unused-command-line-argument"
+fi
 
 # Prefer clang-17 toolchain by default for ABI compatibility with PyTorch/pybind
 # Allow override from environment if explicitly set by user
@@ -41,6 +48,97 @@ rewrite_to_https_in_gitmodules() {
   else
     echo "[git-debug] No .gitmodules in ${repo_dir}"
   fi
+}
+
+# Idempotent patcher for tt-metal hw/CMakeLists.txt to enable dev workarounds on arm64
+patch_tt_metal_hw_cmake() {
+  local hw_cmake
+  hw_cmake="$1"
+  if [[ ! -f "$hw_cmake" ]]; then
+    echo "[tt-metal][patch] hw CMakeLists.txt not found: $hw_cmake"; return 0; fi
+  if grep -q 'TT_FORCE_SFPI_X86' "$hw_cmake"; then
+    echo "[tt-metal][patch] Workaround flags already present"; return 0; fi
+  echo "[tt-metal][patch] Injecting SFPI/skip-toolchain workarounds into $(basename "$hw_cmake")"
+  awk '
+    BEGIN{added_opts=0; added_override=0; added_skip=0}
+    {
+      if (!added_opts && $0 ~ /^file\(STRINGS \"\.\.\/sfpi-version\.sh\" SFPI\)/) {
+        print "option(TT_FORCE_SFPI_X86 \"Force SFPI tarball arch to x86_64_Linux (DEV WORKAROUND)\" OFF)";
+        print "option(TT_SKIP_HW_TOOLCHAIN \"Skip building HW toolchain objects (DEV WORKAROUND)\" OFF)";
+        print "if(DEFINED ENV{TT_FORCE_SFPI_X86})";
+        print "    set(TT_FORCE_SFPI_X86 $ENV{TT_FORCE_SFPI_X86} CACHE BOOL \"\" FORCE)";
+        print "endif()";
+        print "if(DEFINED ENV{TT_SKIP_HW_TOOLCHAIN})";
+        print "    set(TT_SKIP_HW_TOOLCHAIN $ENV{TT_SKIP_HW_TOOLCHAIN} CACHE BOOL \"\" FORCE)";
+        print "endif()";
+        added_opts=1;
+      }
+      print $0;
+      if (!added_override && $0 ~ /^set\(SFPI_arch_os \\"\$\{CMAKE_HOST_SYSTEM_PROCESSOR\}_\$\{CMAKE_HOST_SYSTEM_NAME\}\\"\)/) {
+        print "if(TT_FORCE_SFPI_X86)";
+        print "    set(SFPI_arch_os \"x86_64_Linux\")";
+        print "endif()";
+        added_override=1;
+      }
+      if (!added_skip && $0 ~ /^include\(FetchContent\)/) {
+        print "if(TT_SKIP_HW_TOOLCHAIN)";
+        print "    add_custom_target(hw_toolchain ALL)";
+        print "    add_library(hw INTERFACE)";
+        print "    add_library(Metalium::Metal::Hardware ALIAS hw)";
+        print "    target_include_directories(hw INTERFACE inc)";
+        print "    return()";
+        print "endif()";
+        added_skip=1;
+      }
+    }
+  ' "$hw_cmake" > "$hw_cmake.tmp" && mv "$hw_cmake.tmp" "$hw_cmake"
+}
+
+# Download and unpack x86_64 SFPI toolchain into tt-metal runtime/sfpi (idempotent)
+download_sfpi_x86() {
+  local tt_metal_dir="$1"
+  local dest_dir="${tt_metal_dir}/runtime/sfpi"
+  local version_file="${tt_metal_dir}/tt_metal/sfpi-version.sh"
+  if [[ -x "${dest_dir}/compiler/bin/riscv32-unknown-elf-g++" ]]; then
+    echo "[tt-metal][sfpi] Already present: ${dest_dir}/compiler/bin/riscv32-unknown-elf-g++"; return 0; fi
+  if [[ ! -f "${version_file}" ]]; then
+    echo "[tt-metal][sfpi][WARN] Version file not found: ${version_file}"; return 0; fi
+  # shellcheck disable=SC1090
+  source "${version_file}"
+  if [[ -z "${sfpi_version:-}" || -z "${sfpi_url:-}" || -z "${sfpi_x86_64_Linux_tgz_md5:-}" ]]; then
+    echo "[tt-metal][sfpi][WARN] Failed to read version/url/md5 from ${version_file}"; return 0; fi
+  local url="${sfpi_url}/${sfpi_version}/sfpi-x86_64_Linux.tgz"
+  local tmp_tgz="/tmp/sfpi-x86_64_Linux-${sfpi_version}.tgz"
+  echo "[tt-metal][sfpi] Downloading ${url}"
+  mkdir -p /tmp
+  if ! wget -q -O "${tmp_tgz}" "${url}"; then
+    echo "[tt-metal][sfpi][WARN] Download failed: ${url}"; return 0; fi
+  if command -v md5sum >/dev/null 2>&1; then
+    local md5; md5=$(md5sum "${tmp_tgz}" | awk '{print $1}')
+    if [[ "${md5}" != "${sfpi_x86_64_Linux_tgz_md5}" ]]; then
+      echo "[tt-metal][sfpi][WARN] MD5 mismatch (${md5} != ${sfpi_x86_64_Linux_tgz_md5}), proceeding anyway";
+    fi
+  fi
+  echo "[tt-metal][sfpi] Unpacking to ${dest_dir}"
+  rm -rf "${dest_dir}" || true
+  mkdir -p "${dest_dir}"
+  tar -xzf "${tmp_tgz}" -C "${dest_dir}" --strip-components=1 || { echo "[tt-metal][sfpi][ERROR] Unpack failed"; return 0; }
+  echo "[tt-metal][sfpi] Installed: ${dest_dir}"
+}
+
+# Create shim headers so includes like "hostdevcommon/profiler_common.h" resolve via tt_metal/api
+create_hostdev_shims() {
+  local tt_metal_dir="$1"
+  local shim_dir="${tt_metal_dir}/tt_metal/api/hostdevcommon"
+  local real_base_rel="../../hostdevcommon/api/hostdevcommon"
+  mkdir -p "${shim_dir}"
+  for hdr in profiler_common.h dprint_common.h kernel_structs.h common_values.hpp; do
+    local shim_file="${shim_dir}/${hdr}"
+    if [[ ! -f "${shim_file}" ]]; then
+      printf '%s\n' "#pragma once" "#include \"${real_base_rel}/${hdr}\"" > "${shim_file}"
+      echo "[tt-metal][shim] Created ${shim_file}"
+    fi
+  done
 }
 
 # Try to export Torch_DIR if built-from-source layout is present
@@ -299,7 +397,17 @@ build_pytorch_from_source() {
   git submodule update --init --recursive || { echo "[pytorch][git][ERROR] submodule update failed"; exit 1; }
 
   # 2.5 Python-зависимости PyTorch
-  python -m pip install mkl-static mkl-include
+  # MKL колёса доступны только для x86_64. На arm64 используем OpenBLAS из apt.
+  local host_arch
+  host_arch="$(uname -m)"
+  if [[ "${host_arch}" == "x86_64" || "${host_arch}" == "amd64" ]]; then
+    python -m pip install mkl-static mkl-include
+  else
+    if command -v apt-get >/dev/null 2>&1; then
+      apt-get update -y || true
+      apt-get install -y --no-install-recommends libopenblas-dev
+    fi
+  fi
   python -m pip install -U numpy==1.26.4
   python -m pip install -r requirements.txt
 
@@ -309,6 +417,11 @@ build_pytorch_from_source() {
   echo "[pytorch] Building with CC=${CC} CXX=${CXX} (CPU-only, no-MPI)"
   export CMAKE_GENERATOR="Ninja"
   export CMAKE_ARGS="-DUSE_MPI=OFF;-DUSE_DISTRIBUTED=ON;-DUSE_NCCL=OFF;-DUSE_CUDA=OFF;-DUSE_ROCM=OFF"
+  # На arm64 принудительно укажем BLAS и отключим oneDNN/MKLDNN
+  if [[ "${host_arch}" != "x86_64" && "${host_arch}" != "amd64" ]]; then
+    export BLAS=OpenBLAS
+    export USE_MKLDNN=0
+  fi
   USE_CUDA=0 \
   USE_ROCM=0 \
   USE_NCCL=0 \
@@ -382,6 +495,13 @@ build_tt_metal() {
   if [[ -x ./install_dependencies.sh ]]; then
     bash ./install_dependencies.sh || true
   fi
+
+  # Ensure dev workarounds are present (submodule could be reset by git)
+  patch_tt_metal_hw_cmake "${tt_metal_dir}/tt_metal/hw/CMakeLists.txt"
+  # Proactively ensure SFPI toolchain is available even when skipping HW build
+  download_sfpi_x86 "${tt_metal_dir}"
+  # Create include shims for hostdevcommon headers so includes via api/ path work
+  create_hostdev_shims "${tt_metal_dir}"
 
   # 3.0: Полная очистка по запросу пользователя (через --rebuild)
   if [[ "${REBUILD:-0}" == "1" ]]; then

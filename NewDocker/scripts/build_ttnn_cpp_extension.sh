@@ -45,6 +45,43 @@ fi
 
 ext_dir="${repo_dir}/torch_ttnn/cpp_extension"
 
+# Idempotent patch: drop '+cpu' suffix from torch/torchvision pins in setup.py
+patch_remove_cpu_tags() {
+  local setup_py="${repo_dir}/setup.py"
+  if [[ -f "${setup_py}" ]]; then
+    if grep -qE '\+cpu' "${setup_py}"; then
+      echo "[ttnn-cpp-ext][patch] Removing '+cpu' tags in ${setup_py}"
+      sed -i 's/+cpu//g' "${setup_py}" || true
+    else
+      echo "[ttnn-cpp-ext][patch] '+cpu' tags not found in ${setup_py}"
+    fi
+  fi
+}
+
+install_local_ttnn() {
+  if python - <<'PY'
+try:
+    import ttnn  # noqa: F401
+    import sys; sys.exit(0)
+except Exception:
+    import sys; sys.exit(1)
+PY
+  then
+    echo "[ttnn-cpp-ext] ttnn already importable"
+    return 0
+  fi
+  local ttnn_dir="${repo_dir}/ttnn"
+  if [[ -d "${ttnn_dir}" ]]; then
+    echo "[ttnn-cpp-ext] Installing local ttnn from ${ttnn_dir} (editable, no-deps)"
+    pushd "${ttnn_dir}" >/dev/null
+    python -m pip install -e . --no-build-isolation --no-deps || true
+    python3 -m pip install -e . --no-build-isolation --no-deps || true
+    popd >/dev/null
+  else
+    echo "[ttnn-cpp-ext][WARN] ${ttnn_dir} not found; skipping local ttnn install"
+  fi
+}
+
 if [[ ${REBUILD} -eq 1 ]]; then
   echo "[ttnn-cpp-ext] --rebuild: cleaning intermediate artifacts in ${ext_dir}"
   rm -rf "${ext_dir}/build" \
@@ -78,6 +115,10 @@ if [[ -z "${TT_METAL_HOME:-}" ]]; then
   export TT_METAL_HOME
 fi
 echo "[ttnn-cpp-ext] TT_METAL_HOME='${TT_METAL_HOME}'"
+
+# Ensure clean pins before building/installing python package
+patch_remove_cpu_tags
+install_local_ttnn
 
 # Ensure numpy<2 for many-build compatibility
 python - <<'PY'
@@ -114,19 +155,21 @@ pushd "${ext_dir}" >/dev/null
 export CMAKE_FLAGS="-DCMAKE_C_COMPILER=${CC};-DCMAKE_CXX_COMPILER=${CXX}"
 # python3 setup.py develop
 export PIP_NO_BUILD_ISOLATION=1
-python3 -m pip install -e . --no-build-isolation --no-deps
+python3 -m pip install -e . --no-build-isolation --no-deps || true
+python -m pip install -e . --no-build-isolation --no-deps || true
 popd >/dev/null
 set +x
 
 echo "[ttnn-cpp-ext] Build finished"
 
-# Optionally install top-level torch-ttnn package (editable) to expose Python API
-# This will also install its runtime deps (e.g., ttnn, torchvision, torch if versions differ)
-set -x
-pushd "${repo_dir}" >/dev/null
-python -m pip install -e . --no-build-isolation
-popd >/dev/null
-set +x
+# # Optionally install top-level torch-ttnn package (editable) to expose Python API
+# # This will also install its runtime deps (e.g., ttnn, torchvision, torch if versions differ)
+# set -x
+# pushd "${repo_dir}" >/dev/null
+# python -m pip install -e . --no-build-isolation --no-deps || true
+# python3 -m pip install -e . --no-build-isolation --no-deps || true
+# popd >/dev/null
+# set +x
 
 # Run smoke test to validate imports
 set -x

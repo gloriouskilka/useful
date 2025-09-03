@@ -50,6 +50,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     sudo \
     uuid-runtime \
     wget \
+    libnuma-dev \
     libtbb-dev \
     libcapstone-dev \
     libgtest-dev \
@@ -70,6 +71,11 @@ ENV TT_METAL_HOME=/workspace/pytorch2.0_ttnn/torch_ttnn/cpp_extension/third-part
 RUN printf 'export TT_METAL_HOME=/workspace/pytorch2.0_ttnn/torch_ttnn/cpp_extension/third-party/tt-metal\n' > /etc/profile.d/tt_env.sh \
     && chmod +x /etc/profile.d/tt_env.sh \
     && echo 'export TT_METAL_HOME=/workspace/pytorch2.0_ttnn/torch_ttnn/cpp_extension/third-party/tt-metal' >> /root/.bashrc
+
+# Preload tt-metal libs path for runtime (bash shells)
+ENV TT_LIB_DIR=/workspace/pytorch2.0_ttnn/torch_ttnn/cpp_extension/third-party/tt-metal/build/lib
+RUN echo 'export TT_LIB_DIR=/workspace/pytorch2.0_ttnn/torch_ttnn/cpp_extension/third-party/tt-metal/build/lib' >> /root/.bashrc \
+    && echo 'export LD_LIBRARY_PATH="$TT_LIB_DIR:${LD_LIBRARY_PATH:-}"' >> /root/.bashrc
 
 # numpy требуется для сборки tt-train
 RUN python3 -m pip install --no-cache-dir --upgrade pip \
@@ -121,6 +127,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-server \
     vim \
     libgl1 \
+    libnuma-dev \
+    mc \
+    htop \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # IWYU ставится внутри scripts/build_toolchain.sh (по необходимости)
