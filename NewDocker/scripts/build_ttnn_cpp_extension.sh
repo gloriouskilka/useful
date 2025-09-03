@@ -59,26 +59,36 @@ patch_remove_cpu_tags() {
 }
 
 install_local_ttnn() {
-  if python - <<'PY'
-try:
-    import ttnn  # noqa: F401
-    import sys; sys.exit(0)
-except Exception:
-    import sys; sys.exit(1)
+  local ws_ttnn_dir="${repo_dir}/ttnn"
+  # Decide if current ttnn is acceptable (must be from workspace)
+  python - <<PY || true
+import sys, importlib.util, os
+spec = importlib.util.find_spec('ttnn')
+if spec and spec.origin:
+    path = spec.origin
+    print(f"[ttnn-cpp-ext] ttnn found at: {path}")
+    if '/workspace/pytorch2.0_ttnn/ttnn' not in path:
+        sys.exit(2)  # wrong location -> reinstall
+    else:
+        sys.exit(0)  # correct
+else:
+    sys.exit(1)  # not importable
 PY
-  then
-    echo "[ttnn-cpp-ext] ttnn already importable"
+  rc=$?
+  if [[ $rc -eq 0 ]]; then
+    echo "[ttnn-cpp-ext] ttnn from workspace already active"
     return 0
   fi
-  local ttnn_dir="${repo_dir}/ttnn"
-  if [[ -d "${ttnn_dir}" ]]; then
-    echo "[ttnn-cpp-ext] Installing local ttnn from ${ttnn_dir} (editable, no-deps)"
-    pushd "${ttnn_dir}" >/dev/null
-    python -m pip install -e . --no-build-isolation --no-deps || true
-    python3 -m pip install -e . --no-build-isolation --no-deps || true
+  echo "[ttnn-cpp-ext] Forcing local ttnn install (rc=$rc)"
+  python -m pip uninstall -y ttnn || true
+  python3 -m pip uninstall -y ttnn || true
+  if [[ -d "${ws_ttnn_dir}" ]]; then
+    pushd "${ws_ttnn_dir}" >/dev/null
+    python -m pip install -e . --no-build-isolation || true
+    python3 -m pip install -e . --no-build-isolation || true
     popd >/dev/null
   else
-    echo "[ttnn-cpp-ext][WARN] ${ttnn_dir} not found; skipping local ttnn install"
+    echo "[ttnn-cpp-ext][WARN] ${ws_tnn_dir} not found; cannot install local ttnn"
   fi
 }
 
@@ -155,8 +165,8 @@ pushd "${ext_dir}" >/dev/null
 export CMAKE_FLAGS="-DCMAKE_C_COMPILER=${CC};-DCMAKE_CXX_COMPILER=${CXX}"
 # python3 setup.py develop
 export PIP_NO_BUILD_ISOLATION=1
-python3 -m pip install -e . --no-build-isolation --no-deps || true
-python -m pip install -e . --no-build-isolation --no-deps || true
+python3 -m pip install -e . --no-build-isolation || true
+python -m pip install -e . --no-build-isolation || true
 popd >/dev/null
 set +x
 
