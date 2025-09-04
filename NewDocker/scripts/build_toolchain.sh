@@ -353,10 +353,13 @@ build_pytorch_from_source() {
   # 2.2 Сносим колёсные сборки torch, если установлены
   python -m pip uninstall -y torch torchvision torchmetrics torch-fidelity || true
 
-  # 2.3 Системная зависимость (OMP для clang-17)
+  # 2.3 Системные зависимости (OMP, OpenBLAS, protobuf)
   if command -v apt-get >/dev/null 2>&1; then
     apt-get update -y || true
-    apt-get install -y --no-install-recommends libomp-17-dev || true
+    apt-get install -y --no-install-recommends \
+      libomp-17-dev \
+      libopenblas-dev \
+      libprotobuf-dev protobuf-compiler || true
   fi
 
   # 2.4 Получаем исходники PyTorch совместимой версии
@@ -397,38 +400,48 @@ build_pytorch_from_source() {
   git submodule update --init --recursive || { echo "[pytorch][git][ERROR] submodule update failed"; exit 1; }
 
   # 2.5 Python-зависимости PyTorch
-  # MKL колёса доступны только для x86_64. На arm64 используем OpenBLAS из apt.
   local host_arch
   host_arch="$(uname -m)"
-  if [[ "${host_arch}" == "x86_64" || "${host_arch}" == "amd64" ]]; then
-    python -m pip install mkl-static mkl-include
-  else
-    if command -v apt-get >/dev/null 2>&1; then
-      apt-get update -y || true
-      apt-get install -y --no-install-recommends libopenblas-dev
-    fi
-  fi
   python -m pip install -U numpy==1.26.4
   python -m pip install -r requirements.txt
 
-  # 2.6 Сборка PyTorch (разделяемая, develop)
+  # 2.6 Конфигурация и сборка PyTorch (без AVX) через CMake
   echo "[pytorch] Cleaning previous build dir"
   rm -rf build || true
-  echo "[pytorch] Building with CC=${CC} CXX=${CXX} (CPU-only, no-MPI)"
-  export CMAKE_GENERATOR="Ninja"
-  export CMAKE_ARGS="-DUSE_MPI=OFF;-DUSE_DISTRIBUTED=ON;-DUSE_NCCL=OFF;-DUSE_CUDA=OFF;-DUSE_ROCM=OFF"
-  # На arm64 принудительно укажем BLAS и отключим oneDNN/MKLDNN
-  if [[ "${host_arch}" != "x86_64" && "${host_arch}" != "amd64" ]]; then
-    export BLAS=OpenBLAS
-    export USE_MKLDNN=0
+  echo "[pytorch] Configuring CMake (no-AVX, OpenBLAS, system protobuf)"
+  local openblas_lib
+  if [[ "${host_arch}" == "x86_64" || "${host_arch}" == "amd64" ]]; then
+    openblas_lib="/usr/lib/x86_64-linux-gnu/libopenblas.so"
+  else
+    openblas_lib="/usr/lib/aarch64-linux-gnu/libopenblas.so"
   fi
-  USE_CUDA=0 \
-  USE_ROCM=0 \
-  USE_NCCL=0 \
-  USE_MPI=0 \
-  USE_DISTRIBUTED=1 \
-  BUILD_TEST=0 \
-  CC="${CC}" CXX="${CXX}" CMAKE_POLICY_VERSION_MINIMUM=3.5 python setup.py develop
+  cmake -S "${pytorch_dir}" -B "${pytorch_dir}/build" -GNinja \
+    -DBUILD_PYTHON=ON -DBUILD_TEST=OFF \
+    -DBLAS=OpenBLAS -DOpenBLAS_LIB="${openblas_lib}" -DOpenBLAS_INCLUDE_DIR=/usr/include \
+    -DUSE_MKLDNN=OFF -DUSE_MKL=OFF \
+    -DUSE_FBGEMM=OFF -DUSE_QNNPACK=OFF -DUSE_PYTORCH_QNNPACK=OFF -DUSE_XNNPACK=OFF \
+    -DATEN_CPU_STATIC_DISPATCH=DEFAULT -DCPU_CAPABILITY=default \
+    -DUSE_AVX=OFF -DC_HAS_AVX_2=OFF -DC_HAS_AVX2_2=OFF -DCXX_HAS_AVX_2=OFF -DCXX_HAS_AVX2_2=OFF \
+    -DCAFFE2_COMPILER_SUPPORTS_AVX512_EXTENSIONS=OFF \
+    -DUSE_SYSTEM_PROTOBUF=ON \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DPYTHON_EXECUTABLE="$(command -v python)" \
+    -DCMAKE_PREFIX_PATH="$(python -c 'import site; print(site.getsitepackages()[0])' || echo /opt/venv/lib/python3.10/site-packages)" \
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+
+  echo "[pytorch] Building"
+  cmake --build "${pytorch_dir}/build" --parallel "$(num_procs)"
+
+  echo "[pytorch] Installing into venv (develop)"
+  CC="${CC}" CXX="${CXX}" python setup.py develop
+
+  # 2.7 Гарантируем наличие разделяемых библиотек в torch/lib рядом с пакетами Python
+  # Это необходимо для _load_global_deps() в torch/__init__.py
+  echo "[pytorch] Ensuring shared libs are present under torch/lib"
+  mkdir -p "${pytorch_dir}/torch/lib"
+  if compgen -G "${pytorch_dir}/build/lib/*.so" > /dev/null; then
+    cp -a ${pytorch_dir}/build/lib/*.so "${pytorch_dir}/torch/lib/" || true
+  fi
   popd >/dev/null
   echo "[pytorch] Done"
 
@@ -449,6 +462,26 @@ build_pytorch_from_source() {
     fi
   else
     echo "[pytorch][WARN] Torch CMake dir not found at ${torch_cmake_dir}. If build_metal fails on Torch_DIR, set it manually."
+  fi
+
+  # Export LD_LIBRARY_PATH to include PyTorch shared libs for runtime (ctypes loads libtorch_global_deps.so)
+  local pytorch_lib_dir
+  pytorch_lib_dir="${pytorch_dir}/torch/lib"
+  if [[ -d "${pytorch_lib_dir}" ]]; then
+    if ! echo ":${LD_LIBRARY_PATH:-}:" | grep -q ":${pytorch_lib_dir}:"; then
+      export LD_LIBRARY_PATH="${pytorch_lib_dir}:${LD_LIBRARY_PATH:-}"
+      echo "[pytorch] Added to LD_LIBRARY_PATH: ${pytorch_lib_dir}"
+    fi
+    if ! grep -q "export LD_LIBRARY_PATH=\"${pytorch_lib_dir}:\$\{LD_LIBRARY_PATH:-\}\"" /root/.bashrc 2>/dev/null; then
+      echo "export LD_LIBRARY_PATH=\"${pytorch_lib_dir}:
+\${LD_LIBRARY_PATH:-}\"" >> /root/.bashrc
+      # Compact the newline that echo inserted above
+      sed -i ':a;N;$!ba;s/\n\\${LD_LIBRARY_PATH/-}/\\${LD_LIBRARY_PATH:-}/g' /root/.bashrc || true
+      sed -i ':a;N;$!ba;s/:\\${LD_LIBRARY_PATH:-}\\"/:\\${LD_LIBRARY_PATH:-}\\"/g' /root/.bashrc || true
+      echo "[pytorch] Persisted LD_LIBRARY_PATH to /root/.bashrc"
+    fi
+  else
+    echo "[pytorch][WARN] PyTorch lib dir not found at ${pytorch_lib_dir}"
   fi
 }
 

@@ -45,53 +45,6 @@ fi
 
 ext_dir="${repo_dir}/torch_ttnn/cpp_extension"
 
-# Idempotent patch: drop '+cpu' suffix from torch/torchvision pins in setup.py
-patch_remove_cpu_tags() {
-  local setup_py="${repo_dir}/setup.py"
-  if [[ -f "${setup_py}" ]]; then
-    if grep -qE '\+cpu' "${setup_py}"; then
-      echo "[ttnn-cpp-ext][patch] Removing '+cpu' tags in ${setup_py}"
-      sed -i 's/+cpu//g' "${setup_py}" || true
-    else
-      echo "[ttnn-cpp-ext][patch] '+cpu' tags not found in ${setup_py}"
-    fi
-  fi
-}
-
-install_local_ttnn() {
-  local ws_ttnn_dir="${repo_dir}/ttnn"
-  # Decide if current ttnn is acceptable (must be from workspace)
-  python - <<PY || true
-import sys, importlib.util, os
-spec = importlib.util.find_spec('ttnn')
-if spec and spec.origin:
-    path = spec.origin
-    print(f"[ttnn-cpp-ext] ttnn found at: {path}")
-    if '/workspace/pytorch2.0_ttnn/ttnn' not in path:
-        sys.exit(2)  # wrong location -> reinstall
-    else:
-        sys.exit(0)  # correct
-else:
-    sys.exit(1)  # not importable
-PY
-  rc=$?
-  if [[ $rc -eq 0 ]]; then
-    echo "[ttnn-cpp-ext] ttnn from workspace already active"
-    return 0
-  fi
-  echo "[ttnn-cpp-ext] Forcing local ttnn install (rc=$rc)"
-  python -m pip uninstall -y ttnn || true
-  python3 -m pip uninstall -y ttnn || true
-  if [[ -d "${ws_ttnn_dir}" ]]; then
-    pushd "${ws_ttnn_dir}" >/dev/null
-    python -m pip install -e . --no-build-isolation || true
-    python3 -m pip install -e . --no-build-isolation || true
-    popd >/dev/null
-  else
-    echo "[ttnn-cpp-ext][WARN] ${ws_tnn_dir} not found; cannot install local ttnn"
-  fi
-}
-
 if [[ ${REBUILD} -eq 1 ]]; then
   echo "[ttnn-cpp-ext] --rebuild: cleaning intermediate artifacts in ${ext_dir}"
   rm -rf "${ext_dir}/build" \
@@ -125,10 +78,6 @@ if [[ -z "${TT_METAL_HOME:-}" ]]; then
   export TT_METAL_HOME
 fi
 echo "[ttnn-cpp-ext] TT_METAL_HOME='${TT_METAL_HOME}'"
-
-# Ensure clean pins before building/installing python package
-patch_remove_cpu_tags
-install_local_ttnn
 
 # Ensure numpy<2 for many-build compatibility
 python - <<'PY'
@@ -165,21 +114,19 @@ pushd "${ext_dir}" >/dev/null
 export CMAKE_FLAGS="-DCMAKE_C_COMPILER=${CC};-DCMAKE_CXX_COMPILER=${CXX}"
 # python3 setup.py develop
 export PIP_NO_BUILD_ISOLATION=1
-python3 -m pip install -e . --no-build-isolation || true
-python -m pip install -e . --no-build-isolation || true
+python3 -m pip install -e . --no-build-isolation --no-deps
 popd >/dev/null
 set +x
 
 echo "[ttnn-cpp-ext] Build finished"
 
-# # Optionally install top-level torch-ttnn package (editable) to expose Python API
-# # This will also install its runtime deps (e.g., ttnn, torchvision, torch if versions differ)
-# set -x
-# pushd "${repo_dir}" >/dev/null
-# python -m pip install -e . --no-build-isolation --no-deps || true
-# python3 -m pip install -e . --no-build-isolation --no-deps || true
-# popd >/dev/null
-# set +x
+# Optionally install top-level torch-ttnn package (editable) to expose Python API
+# This will also install its runtime deps (e.g., ttnn, torchvision, torch if versions differ)
+set -x
+pushd "${repo_dir}" >/dev/null
+python -m pip install -e . --no-build-isolation
+popd >/dev/null
+set +x
 
 # Run smoke test to validate imports
 set -x
